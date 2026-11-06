@@ -1,0 +1,518 @@
+<!doctype html>
+<!--
+  Project REMOTE — Receiver (приёмник)
+  Одна HTML-страница, ничего не устанавливается.
+  Открыть в Chrome на Chromebook (из «Файлов» двойным щелчком) или разместить на HTTPS
+  (например, GitHub Pages) и открыть по ссылке.
+  Настройки брокера должны совпадать с remote_sender.py.
+-->
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Project REMOTE</title>
+<script src="https://unpkg.com/mqtt@5.16.1/dist/mqtt.min.js"></script>
+<style>
+  :root{
+    --bg:#0f1218; --panel:#171b24; --line:#262c38; --fg:#e8ebf1; --muted:#8b93a5;
+    --accent:#3b82f6; --ok:#22c55e; --warn:#f59e0b; --err:#ef4444;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);
+    font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  button,input,select{font:inherit}
+  .hidden{display:none!important}
+
+  /* ---------- экран подключения ---------- */
+  #login{min-height:100%;display:flex;align-items:center;justify-content:center;padding:24px 16px}
+  .box{width:100%;max-width:420px;background:var(--panel);border:1px solid var(--line);
+    border-radius:16px;padding:28px}
+  h1{margin:0 0 4px;font-size:22px;letter-spacing:.2px}
+  .sub{color:var(--muted);margin:0 0 22px;font-size:14px}
+  label{display:block;font-size:13px;color:var(--muted);margin:14px 0 6px}
+  input,select{width:100%;padding:11px 12px;border-radius:10px;border:1px solid var(--line);
+    background:#0d1016;color:var(--fg);outline:none}
+  input:focus{border-color:var(--accent)}
+  #devId{font:600 20px/1 ui-monospace,Consolas,monospace;letter-spacing:2px}
+  .seg{display:flex;gap:6px;background:#0d1016;border:1px solid var(--line);border-radius:10px;padding:4px}
+  .seg button{flex:1;border:0;background:none;color:var(--muted);padding:8px;border-radius:7px;cursor:pointer}
+  .seg button.on{background:var(--line);color:var(--fg)}
+  .primary{width:100%;margin-top:20px;padding:12px;border:0;border-radius:10px;
+    background:var(--accent);color:#fff;font-weight:600;cursor:pointer}
+  .primary:disabled{opacity:.55;cursor:default}
+  #status{margin-top:14px;min-height:22px;font-size:14px;color:var(--muted)}
+  #status.ok{color:var(--ok)} #status.err{color:var(--err)} #status.warn{color:var(--warn)}
+  .online{font-size:13px;margin-top:6px;color:var(--muted)}
+  .online b{font-weight:600}
+  details{margin-top:18px;color:var(--muted);font-size:13px}
+  summary{cursor:pointer}
+  details label{margin-top:10px}
+
+  /* ---------- экран сессии ---------- */
+  #session{position:fixed;inset:0;background:#000}
+  #screen{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;
+    background:#000;outline:none;touch-action:none}
+  #bar{position:absolute;top:8px;left:50%;transform:translateX(-50%);display:flex;
+    align-items:center;gap:6px;padding:6px 8px;background:rgba(23,27,36,.92);
+    border:1px solid var(--line);border-radius:12px;transition:opacity .25s;z-index:5;
+    max-width:calc(100% - 16px);flex-wrap:wrap;justify-content:center}
+  #bar.dim{opacity:.12} #bar:hover{opacity:1}
+  #bar button,#bar select{background:#0d1016;color:var(--fg);border:1px solid var(--line);
+    border-radius:8px;padding:6px 10px;cursor:pointer;width:auto;font-size:13px}
+  #bar .danger{background:var(--err);border-color:var(--err);color:#fff}
+  #peer{font-size:13px;font-weight:600;padding:0 6px;white-space:nowrap}
+  #stats{font:12px ui-monospace,Consolas,monospace;color:var(--muted);padding:0 6px;white-space:nowrap}
+  #overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    color:var(--muted);pointer-events:none;font-size:15px}
+  #viewonly{position:absolute;bottom:10px;left:50%;transform:translateX(-50%);
+    background:rgba(245,158,11,.9);color:#111;padding:4px 10px;border-radius:8px;font-size:13px}
+</style>
+</head>
+<body>
+
+<!-- ======================= ПОДКЛЮЧЕНИЕ ======================= -->
+<div id="login">
+  <div class="box">
+    <h1>Project REMOTE</h1>
+    <p class="sub">Подключение к компьютеру с Windows</p>
+
+    <label for="devId">ID компьютера</label>
+    <input id="devId" inputmode="numeric" autocomplete="off" placeholder="123 456 789">
+    <div class="online" id="onlineInfo"></div>
+
+    <label>Способ входа</label>
+    <div class="seg" id="modeSeg">
+      <button data-mode="perm" class="on" type="button">Постоянный пароль</button>
+      <button data-mode="temp" type="button">Временный код</button>
+    </div>
+
+    <label for="secret" id="secretLbl">Пароль</label>
+    <input id="secret" type="password" autocomplete="current-password">
+
+    <button class="primary" id="connectBtn" type="button">Подключиться</button>
+    <div id="status"></div>
+
+    <details>
+      <summary>Дополнительно</summary>
+      <label for="devName">Имя этого устройства (видно владельцу)</label>
+      <input id="devName" placeholder="Chromebook">
+      <label for="brokerUrl">MQTT-брокер (WebSocket)</label>
+      <input id="brokerUrl">
+      <label for="topicPrefix">Префикс каналов</label>
+      <input id="topicPrefix">
+      <label for="turnUrl">TURN-сервер (необязательно)</label>
+      <input id="turnUrl" placeholder="turn:my.server:3478">
+      <label for="turnUser">TURN логин / пароль</label>
+      <div style="display:flex;gap:6px">
+        <input id="turnUser" placeholder="логин"><input id="turnPass" type="password" placeholder="пароль">
+      </div>
+    </details>
+  </div>
+</div>
+
+<!-- ======================= СЕССИЯ ======================= -->
+<div id="session" class="hidden">
+  <video id="screen" autoplay playsinline muted tabindex="0"></video>
+  <div id="overlay">Ожидание изображения…</div>
+  <div id="bar">
+    <span id="peer">—</span>
+    <select id="quality" title="Качество">
+      <option value="720,30">720p · 30 FPS</option>
+      <option value="1080,30">1080p · 30 FPS</option>
+      <option value="1080,60">1080p · 60 FPS</option>
+      <option value="720,15">720p · 15 FPS (слабая сеть)</option>
+    </select>
+    <select id="monitor" title="Монитор" class="hidden"></select>
+    <button id="winBtn" title="Клавиша Windows">⊞ Win</button>
+    <button id="fsBtn">Во весь экран</button>
+    <span id="stats"></span>
+    <button id="discBtn" class="danger">Отключиться</button>
+  </div>
+  <div id="viewonly" class="hidden">Только просмотр — владелец запретил управление</div>
+</div>
+
+<script>
+"use strict";
+/* ============================ настройки ============================ */
+const DEFAULTS = {
+  brokerUrl: "wss://broker.hivemq.com:8884/mqtt",
+  topicPrefix: "prjremote-7f3a/v1",
+  stun: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"],
+};
+const KDF_ITER = 300000;
+const $ = (id) => document.getElementById(id);
+
+function store(k, v) { try { localStorage.setItem("prjremote." + k, v); } catch (e) {} }
+function load(k, d) { try { const v = localStorage.getItem("prjremote." + k); return v == null ? d : v; } catch (e) { return d; } }
+
+$("brokerUrl").value = load("brokerUrl", DEFAULTS.brokerUrl);
+$("topicPrefix").value = load("topicPrefix", DEFAULTS.topicPrefix);
+$("turnUrl").value = load("turnUrl", "");
+$("turnUser").value = load("turnUser", "");
+$("devName").value = load("devName", "Chromebook");
+$("devId").value = load("devId", "");
+let mode = load("mode", "perm");
+
+/* ============================ утилиты ============================ */
+const enc = new TextEncoder(), dec = new TextDecoder();
+const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
+const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+const cleanId = (s) => s.replace(/\D/g, "");
+const cleanCode = (s) => s.toUpperCase().replace(/[^A-Z0-9]/g, "");
+const randId = (n) => Array.from(crypto.getRandomValues(new Uint8Array(n)),
+  (b) => "abcdefghijkmnpqrstuvwxyz23456789"[b % 32]).join("");
+
+function setStatus(text, cls = "") { const s = $("status"); s.textContent = text; s.className = cls; }
+
+async function deriveKey(secret, devId, m) {
+  const base = await crypto.subtle.importKey("raw", enc.encode(secret.normalize("NFC")), "PBKDF2", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt: enc.encode(`prjremote-v1|${devId}|${m}`), iterations: KDF_ITER, hash: "SHA-256" },
+    base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+}
+async function seal(key, obj, aad) {
+  const n = crypto.getRandomValues(new Uint8Array(12));
+  const c = await crypto.subtle.encrypt({ name: "AES-GCM", iv: n, additionalData: enc.encode(aad) }, key, enc.encode(JSON.stringify(obj)));
+  return { n: b64(n), c: b64(c) };
+}
+async function unseal(key, msg, aad) {
+  const p = await crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64(msg.n), additionalData: enc.encode(aad) }, key, unb64(msg.c));
+  return JSON.parse(dec.decode(p));
+}
+
+/* ============================ режим входа ============================ */
+function applyMode() {
+  document.querySelectorAll("#modeSeg button").forEach((b) => b.classList.toggle("on", b.dataset.mode === mode));
+  const s = $("secret");
+  if (mode === "perm") { $("secretLbl").textContent = "Пароль"; s.type = "password"; s.placeholder = ""; s.style.letterSpacing = ""; }
+  else { $("secretLbl").textContent = "Временный код (с экрана компьютера)"; s.type = "text"; s.placeholder = "ABCD-EF23"; s.style.letterSpacing = "2px"; }
+  s.value = "";
+}
+document.querySelectorAll("#modeSeg button").forEach((b) => b.onclick = () => { mode = b.dataset.mode; store("mode", mode); applyMode(); });
+applyMode();
+
+/* ============================ MQTT ============================ */
+let mq = null, mqUrl = null, statusTopic = null;
+function topic(...p) { return [$("topicPrefix").value.trim(), ...p].join("/"); }
+
+function ensureMqtt() {
+  const url = $("brokerUrl").value.trim();
+  if (mq && mqUrl === url) return Promise.resolve(mq);
+  if (mq) { try { mq.end(true); } catch (e) {} }
+  mqUrl = url;
+  mq = mqtt.connect(url, { clientId: "prr-" + randId(10), clean: true, reconnectPeriod: 2000, connectTimeout: 10000 });
+  mq.on("message", onMqttMessage);
+  return new Promise((res, rej) => {
+    const t = setTimeout(() => rej(new Error("Нет связи с сервером сигнализации")), 12000);
+    mq.once("connect", () => { clearTimeout(t); res(mq); });
+  });
+}
+
+const handlers = new Map();      // topic -> fn
+function onMqttMessage(t, payload) {
+  let obj; try { obj = JSON.parse(payload.toString()); } catch (e) { return; }
+  const h = handlers.get(t); if (h) h(obj);
+}
+
+// индикатор «компьютер в сети»
+let watchTimer = null;
+function watchDevice() {
+  clearTimeout(watchTimer);
+  watchTimer = setTimeout(async () => {
+    const id = cleanId($("devId").value);
+    const info = $("onlineInfo");
+    if (statusTopic) { handlers.delete(statusTopic); try { mq.unsubscribe(statusTopic); } catch (e) {} statusTopic = null; }
+    if (id.length !== 9) { info.textContent = ""; return; }
+    try { await ensureMqtt(); } catch (e) { info.textContent = "Сервер сигнализации недоступен"; return; }
+    statusTopic = topic(id, "status");
+    info.innerHTML = "Проверка…";
+    handlers.set(statusTopic, (s) => {
+      if (s.online) info.innerHTML = `<b style="color:var(--ok)">● В сети</b> · постоянный доступ ${s.perm ? "включён" : "выключен"}${s.temp ? " · есть активный временный код" : ""}`;
+      else info.innerHTML = `<b style="color:var(--muted)">● Не в сети</b>`;
+    });
+    mq.subscribe(statusTopic);
+    setTimeout(() => { if (info.innerHTML === "Проверка…") info.textContent = "Компьютер с таким ID не найден"; }, 4000);
+  }, 400);
+}
+$("devId").addEventListener("input", (e) => {
+  const d = cleanId(e.target.value).slice(0, 9);
+  e.target.value = d.replace(/(\d{3})(?=\d)/g, "$1 ");
+  watchDevice();
+});
+$("secret").addEventListener("input", (e) => {
+  if (mode !== "temp") return;
+  const c = cleanCode(e.target.value).slice(0, 8);
+  e.target.value = c.length > 4 ? c.slice(0, 4) + "-" + c.slice(4) : c;
+});
+if (cleanId($("devId").value).length === 9) watchDevice();
+
+/* ============================ подключение ============================ */
+let pc = null, dc = null, sid = null, connecting = false;
+
+const ERRORS = {
+  auth: "Неверный пароль или код.",
+  mode_off: "Этот способ входа выключен на компьютере (или код истёк).",
+  locked: "Компьютер временно блокирует подключения после неверных попыток. Попробуйте позже.",
+  busy: "Слишком много активных подключений к этому компьютеру.",
+  denied: "Владелец компьютера отклонил подключение.",
+  stale: "Неверное время на устройстве — проверьте часы.",
+  internal: "Ошибка на стороне компьютера.",
+};
+
+function iceServers() {
+  const s = DEFAULTS.stun.map((u) => ({ urls: u }));
+  const t = $("turnUrl").value.trim();
+  if (t) s.push({ urls: t, username: $("turnUser").value, credential: $("turnPass").value });
+  return s;
+}
+
+function waitIce(pc) {
+  return new Promise((res) => {
+    if (pc.iceGatheringState === "complete") return res();
+    const t = setTimeout(res, 5000);
+    pc.addEventListener("icegatheringstatechange", () => { if (pc.iceGatheringState === "complete") { clearTimeout(t); res(); } });
+  });
+}
+
+$("connectBtn").onclick = connect;
+$("secret").addEventListener("keydown", (e) => { if (e.key === "Enter") connect(); });
+
+async function connect() {
+  if (connecting) return;
+  const id = cleanId($("devId").value);
+  let secret = $("secret").value;
+  if (id.length !== 9) return setStatus("Введите 9-значный ID компьютера.", "err");
+  if (mode === "temp") { secret = cleanCode(secret); if (secret.length !== 8) return setStatus("Код состоит из 8 символов.", "err"); }
+  else if (!secret) return setStatus("Введите пароль.", "err");
+  if (!window.crypto || !crypto.subtle) return setStatus("Браузер не поддерживает шифрование: откройте страницу через https:// или как файл.", "err");
+
+  ["brokerUrl", "topicPrefix", "turnUrl", "turnUser", "devName"].forEach((k) => store(k, $(k).value.trim()));
+  store("devId", id);
+  connecting = true; $("connectBtn").disabled = true;
+  try {
+    setStatus("Подготовка ключа…");
+    const key = await deriveKey(secret, id, mode);
+    setStatus("Связь с сервером…");
+    await ensureMqtt();
+
+    sid = randId(16);
+    pc = new RTCPeerConnection({ iceServers: iceServers() });
+    const tr = pc.addTransceiver("video", { direction: "recvonly" });
+    dc = pc.createDataChannel("ctl", { ordered: true });
+    setupPc(pc, tr);
+    await pc.setLocalDescription(await pc.createOffer());
+    setStatus("Поиск сетевого маршрута…");
+    await waitIce(pc);
+
+    const replyTopic = topic(id, "out", sid);
+    const result = new Promise((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error("Компьютер не ответил. Он включён и Sender запущен?")), 25000);
+      handlers.set(replyTopic, async (m) => {
+        if (m.err) { clearTimeout(t); return reject(new Error(ERRORS[m.err] || m.err)); }
+        if (m.st === "confirm") { clearTimeout(t); setStatus("Ждём подтверждения на компьютере…", "warn");
+          setTimeout(() => reject(new Error("Владелец не подтвердил подключение.")), 65000); return; }
+        if (m.n && m.c) {
+          try { resolve(await unseal(key, m, `${sid}|s2r`)); }
+          catch (e) { reject(new Error("Ответ не удалось расшифровать.")); }
+        }
+      });
+    });
+    await new Promise((r) => mq.subscribe(replyTopic, { qos: 1 }, r));
+    const offer = await seal(key, { type: "offer", sdp: pc.localDescription.sdp, ts: Date.now(),
+      name: $("devName").value.trim() || "Chromebook" }, `${sid}|r2s`);
+    mq.publish(topic(id, "in"), JSON.stringify({ sid, mode, ...offer }), { qos: 1 });
+    setStatus("Запрос отправлен…");
+
+    const answer = await result;
+    handlers.delete(replyTopic); mq.unsubscribe(replyTopic);
+    await pc.setRemoteDescription({ type: "answer", sdp: answer.sdp });
+    setStatus("Соединение…");
+    if (mode === "temp") $("secret").value = "";
+  } catch (e) {
+    setStatus(e.message || String(e), "err");
+    teardown(false);
+  } finally {
+    connecting = false; $("connectBtn").disabled = false;
+  }
+}
+
+function setupPc(pc, tr) {
+  pc.ontrack = (e) => {
+    const v = $("screen");
+    v.srcObject = e.streams[0] || new MediaStream([e.track]);
+    try { e.receiver.playoutDelayHint = 0; e.receiver.jitterBufferTarget = 0; } catch (x) {}
+  };
+  pc.onconnectionstatechange = () => {
+    const st = pc.connectionState;
+    if (st === "connected") showSession();
+    else if (st === "failed") { setStatus("Не удалось соединиться напрямую. Возможно, нужен TURN-сервер.", "err"); teardown(false); }
+    else if (st === "disconnected") $("overlay").textContent = "Связь прерывается…";
+  };
+  dc.onopen = () => { send({ t: "hello" }); sendQuality(); };
+  dc.onmessage = (e) => {
+    let m; try { m = JSON.parse(e.data); } catch (x) { return; }
+    if (m.t === "info") {
+      $("peer").textContent = m.name || "Компьютер";
+      $("viewonly").classList.toggle("hidden", m.control !== false);
+      controlAllowed = m.control !== false;
+      const sel = $("monitor");
+      if (m.monitors && m.monitors.length > 1) {
+        sel.innerHTML = m.monitors.map((x, i) => `<option value="${i + 1}">Монитор ${i + 1} · ${x.w}×${x.h}</option>`).join("");
+        sel.classList.remove("hidden");
+      }
+    } else if (m.t === "bye") {
+      setStatus("Отключено: " + (m.reason || ""), "warn");
+      teardown(false);
+    }
+  };
+  dc.onclose = () => { if (pc && pc.connectionState !== "closed" && !$("session").classList.contains("hidden")) { setStatus("Соединение закрыто.", "warn"); teardown(false); } };
+}
+
+function send(obj) { if (dc && dc.readyState === "open") dc.send(JSON.stringify(obj)); }
+function sendQuality() { const [h, fps] = $("quality").value.split(",").map(Number); send({ t: "q", h, fps }); store("quality", $("quality").value); }
+$("quality").value = load("quality", "720,30");
+$("quality").onchange = sendQuality;
+$("monitor").onchange = () => send({ t: "mon", i: Number($("monitor").value) });
+
+function showSession() {
+  $("login").classList.add("hidden");
+  $("session").classList.remove("hidden");
+  $("screen").focus();
+  startStats();
+  dimBarSoon();
+}
+
+function teardown(byUser) {
+  if (byUser) send({ t: "rel" });
+  releaseAll();
+  try { dc && dc.close(); } catch (e) {}
+  try { pc && pc.close(); } catch (e) {}
+  pc = dc = null;
+  stopStats();
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  $("screen").srcObject = null;
+  $("overlay").textContent = "Ожидание изображения…";
+  $("overlay").classList.remove("hidden");
+  $("session").classList.add("hidden");
+  $("login").classList.remove("hidden");
+  $("monitor").classList.add("hidden");
+}
+$("discBtn").onclick = () => { setStatus("Вы отключились."); teardown(true); };
+$("screen").addEventListener("playing", () => $("overlay").classList.add("hidden"));
+
+/* ============================ ввод ============================ */
+let controlAllowed = true;
+const video = $("screen");
+const pressed = new Set(), buttons = new Set();
+const active = () => pc && !$("session").classList.contains("hidden") && controlAllowed;
+
+function norm(e) {
+  const r = video.getBoundingClientRect(), vw = video.videoWidth, vh = video.videoHeight;
+  if (!vw || !vh) return null;
+  const s = Math.min(r.width / vw, r.height / vh), w = vw * s, h = vh * s;
+  const x = (e.clientX - (r.left + (r.width - w) / 2)) / w;
+  const y = (e.clientY - (r.top + (r.height - h) / 2)) / h;
+  return { x: Math.min(1, Math.max(0, x)), y: Math.min(1, Math.max(0, y)), inside: x >= 0 && x <= 1 && y >= 0 && y <= 1 };
+}
+
+let pendingMove = null, rafQueued = false;
+video.addEventListener("pointermove", (e) => {
+  if (!active()) return;
+  const p = norm(e); if (!p) return;
+  pendingMove = p;
+  if (!rafQueued) { rafQueued = true; requestAnimationFrame(() => { rafQueued = false;
+    if (pendingMove) send({ t: "mm", x: +pendingMove.x.toFixed(5), y: +pendingMove.y.toFixed(5) }); pendingMove = null; }); }
+});
+video.addEventListener("pointerdown", (e) => {
+  video.focus();
+  if (!active()) return;
+  const p = norm(e); if (!p || !p.inside) return;
+  e.preventDefault();
+  try { video.setPointerCapture(e.pointerId); } catch (x) {}
+  buttons.add(e.button);
+  send({ t: "md", b: e.button, x: +p.x.toFixed(5), y: +p.y.toFixed(5) });
+});
+video.addEventListener("pointerup", (e) => {
+  if (!active() || !buttons.has(e.button)) return;
+  e.preventDefault();
+  const p = norm(e);
+  buttons.delete(e.button);
+  send(p ? { t: "mu", b: e.button, x: +p.x.toFixed(5), y: +p.y.toFixed(5) } : { t: "mu", b: e.button });
+});
+video.addEventListener("contextmenu", (e) => e.preventDefault());
+video.addEventListener("auxclick", (e) => e.preventDefault());
+
+let wheelAcc = { dx: 0, dy: 0 };
+video.addEventListener("wheel", (e) => {
+  if (!active()) return;
+  e.preventDefault();
+  const k = e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? 800 : 1;   // строки/страницы -> пиксели
+  wheelAcc.dy += -e.deltaY * k * 1.2;   // ~100 px за щелчок колеса в Chrome -> 120 в Windows
+  wheelAcc.dx += e.deltaX * k * 1.2;
+  const dy = Math.trunc(wheelAcc.dy), dx = Math.trunc(wheelAcc.dx);
+  if (dy || dx) { wheelAcc.dy -= dy; wheelAcc.dx -= dx; send({ t: "wh", dy, dx }); }
+}, { passive: false });
+
+function keyHandler(e) {
+  if (!active()) return;
+  if (e.target && e.target.tagName === "SELECT") return;
+  if (!e.code || e.code === "Unidentified") return;
+  e.preventDefault();
+  if (e.type === "keydown") { pressed.add(e.code); send({ t: "kd", c: e.code }); }
+  else { pressed.delete(e.code); send({ t: "ku", c: e.code }); }
+}
+window.addEventListener("keydown", keyHandler, true);
+window.addEventListener("keyup", keyHandler, true);
+
+function releaseAll() {
+  pressed.forEach((c) => send({ t: "ku", c })); pressed.clear();
+  buttons.forEach((b) => send({ t: "mu", b })); buttons.clear();
+}
+window.addEventListener("blur", () => { if (pc) { releaseAll(); send({ t: "rel" }); } });
+document.addEventListener("visibilitychange", () => { if (document.hidden && pc) { releaseAll(); send({ t: "rel" }); } });
+
+$("winBtn").onclick = () => { send({ t: "kd", c: "MetaLeft" }); send({ t: "ku", c: "MetaLeft" }); video.focus(); };
+
+/* ============================ полный экран ============================ */
+$("fsBtn").onclick = async () => {
+  if (document.fullscreenElement) { await document.exitFullscreen().catch(() => {}); return; }
+  await $("session").requestFullscreen().catch(() => {});
+  // Перехватываем системные клавиши (Esc, Поиск/Win, Alt+Tab…) — работает только в полноэкранном режиме
+  try { await navigator.keyboard.lock(); } catch (e) {}
+  video.focus();
+};
+document.addEventListener("fullscreenchange", () => {
+  $("fsBtn").textContent = document.fullscreenElement ? "Окно (держите Esc)" : "Во весь экран";
+  if (!document.fullscreenElement) { try { navigator.keyboard.unlock(); } catch (e) {} }
+});
+
+/* ============================ панель и статистика ============================ */
+let dimTimer = null;
+function dimBarSoon() { clearTimeout(dimTimer); $("bar").classList.remove("dim"); dimTimer = setTimeout(() => $("bar").classList.add("dim"), 3000); }
+$("bar").addEventListener("mouseenter", () => { clearTimeout(dimTimer); $("bar").classList.remove("dim"); });
+$("bar").addEventListener("mouseleave", dimBarSoon);
+
+let statsTimer = null, lastBytes = 0, lastTs = 0;
+function startStats() {
+  stopStats();
+  statsTimer = setInterval(async () => {
+    if (!pc) return;
+    const r = await pc.getStats();
+    let fps = 0, kbps = 0, rtt = null, w = 0, h = 0;
+    r.forEach((s) => {
+      if (s.type === "inbound-rtp" && s.kind === "video") {
+        fps = s.framesPerSecond || 0; w = s.frameWidth || 0; h = s.frameHeight || 0;
+        if (lastTs) kbps = ((s.bytesReceived - lastBytes) * 8) / (s.timestamp - lastTs);
+        lastBytes = s.bytesReceived; lastTs = s.timestamp;
+      }
+      if (s.type === "candidate-pair" && s.state === "succeeded" && s.nominated && s.currentRoundTripTime != null) rtt = s.currentRoundTripTime * 1000;
+    });
+    $("stats").textContent = `${w}×${h} · ${Math.round(fps)} fps · ${(kbps / 1000).toFixed(1)} Мбит/с` + (rtt != null ? ` · ${Math.round(rtt)} мс` : "");
+  }, 1000);
+}
+function stopStats() { clearInterval(statsTimer); statsTimer = null; lastBytes = 0; lastTs = 0; $("stats").textContent = ""; }
+
+window.addEventListener("beforeunload", () => { if (pc) { releaseAll(); send({ t: "rel" }); } });
+</script>
+</body>
+</html>
